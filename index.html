@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Electron DDA</title>
+    <script src="https://unpkg.com/@tailwindcss/browser@4"></script>
+</head>
+<body class="dark dark:bg-gray-800 dark:text-white p-8 h-screen">
+    <div class="flex flex-col gap-4 h-full">
+        <div class="flex justify-center gap-4">
+            <button type="button" id="btnStartCapture" onclick="startCapture()" class="text-white bg-gradient-to-br from-purple-600 to-blue-500 hover:bg-gradient-to-bl focus:ring-4 focus:outline-none focus:ring-blue-300 dark:focus:ring-blue-800 font-medium rounded-lg text-sm px-5 py-2.5 text-center me-2 mb-2 cursor-pointer">Iniciar captura</button>
+            <button type="button" id="btnStopCapture" onclick="stopCapture()" class="text-white bg-gradient-to-br from-purple-600 to-blue-500 hover:bg-gradient-to-bl focus:ring-4 focus:outline-none focus:ring-blue-300 dark:focus:ring-blue-800 font-medium rounded-lg text-sm px-5 py-2.5 text-center me-2 mb-2 cursor-pointer">Parar captura</button>
+        </div>
+        <div class="flex justify-center gap-4" id="monitor-list"></div>
+        <div class="flex justify-center items-center flex-1">
+            <canvas id="videoCanvas" class="h-full w-full"></canvas>
+        </div>
+    </div>
+</body>
+<script>
+    const { ipcRenderer } = require('electron');
+    const canvas = document.getElementById('videoCanvas');
+    const ctx = canvas.getContext('2d');
+
+    let frameQueue = []; // Queue to store incoming frames
+    let isRendering = false; // Flag to prevent overlapping renders
+    let currentFrame = null; // Store the current frame for redrawing
+
+    // Set the canvas internal size to match its CSS size
+    function resizeCanvas() {
+        canvas.width = canvas.clientWidth;
+        canvas.height = canvas.clientHeight;
+        if (currentFrame) {
+            drawFrame(currentFrame); // Redraw the current frame at the new size
+        }
+    }
+
+    // Resize the canvas when the window is resized
+    window.addEventListener('resize', resizeCanvas);
+    resizeCanvas(); // Initial resize
+
+    ipcRenderer.on('monitors', (event, data) => {
+        data.forEach(d => {
+            const radio = document.createElement('input');
+            radio.type = 'radio';
+            radio.name ='monitor';
+            radio.value = d.index;
+
+            const label = document.createElement('label');
+            label.textContent = d.deviceName;
+            label.appendChild(radio);
+
+            document.getElementById('monitor-list').appendChild(label);
+
+            radio.addEventListener('change', (event) => {
+                ipcRenderer.invoke('switchMonitor', parseInt(event.target.value));
+            });
+        });
+    });
+
+    // Receive frames from the main process
+    ipcRenderer.on('frame', (event, frame) => {
+        if (frameQueue.length > 2) {
+            // Drop frames if the queue is too large to avoid memory issues
+            frameQueue.shift();
+        }
+        frameQueue.push(frame);
+        if (!isRendering) {
+            renderFrame();
+        }
+    });
+
+    function drawFrame(frame) {
+        const canvasWidth = canvas.width; // Canvas internal width (matches CSS size)
+        const canvasHeight = canvas.height; // Canvas internal height (matches CSS size)
+        const frameWidth = frame.width; // Frame width (e.g., 1920)
+        const frameHeight = frame.height; // Frame height (e.g., 1080)
+
+        // Calculate scaling factor to maintain aspect ratio
+        const scale = Math.min(canvasWidth / frameWidth, canvasHeight / frameHeight);
+        const scaledWidth = frameWidth * scale;
+        const scaledHeight = frameHeight * scale;
+
+        // Center the frame on the canvas
+        const offsetX = (canvasWidth - scaledWidth) / 2;
+        const offsetY = (canvasHeight - scaledHeight) / 2;
+
+        // Create an ImageData object
+        const imageData = new ImageData(new Uint8ClampedArray(frame.data), frameWidth, frameHeight);
+
+        // Clear the canvas
+        ctx.clearRect(0, 0, canvasWidth, canvasHeight);
+
+        // Draw the frame at the calculated scale
+        const tempCanvas = document.createElement('canvas');
+        tempCanvas.width = frameWidth;
+        tempCanvas.height = frameHeight;
+        const tempCtx = tempCanvas.getContext('2d');
+        tempCtx.putImageData(imageData, 0, 0);
+
+        // Draw the scaled frame onto the main canvas
+        ctx.drawImage(tempCanvas, 0, 0, frameWidth, frameHeight, offsetX, offsetY, scaledWidth, scaledHeight);
+    }
+
+    function renderFrame() {
+        if (frameQueue.length === 0) {
+            isRendering = false;
+            return;
+        }
+
+        isRendering = true;
+        currentFrame = frameQueue.shift(); // Store the current frame for redrawing
+
+        // Draw the frame at the correct scale
+        drawFrame(currentFrame);
+
+        // Schedule the next frame render
+        requestAnimationFrame(renderFrame);
+    }
+
+    function startCapture() {
+        ipcRenderer.invoke('startCapture');
+        document.getElementById('btnStartCapture').disabled = true;
+        document.getElementById('btnStopCapture').disabled = false;
+    }
+
+    function stopCapture() {
+        ipcRenderer.invoke('stopCapture');
+        document.getElementById('btnStartCapture').disabled = false;
+        document.getElementById('btnStopCapture').disabled = true;
+    }
+</script>
+</html>
